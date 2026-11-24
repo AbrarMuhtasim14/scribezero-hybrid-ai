@@ -120,6 +120,14 @@ npx -y firebase-tools@latest deploy --only hosting,firestore:rules
 
 ---
 
+## Screenshots & Live Verification
+
+| Live Hybrid SOAP Synthesis & Cloud Coding (`gemini-3.5-flash-lite` + `gemini-4-hydrogen` Failover) | Honest Offline Mode & Zero-Egress Local PHI Scrubbing |
+| :---: | :---: |
+| ![Live Hybrid Clinical Scribe](docs/live-hybrid-scribe.png) | ![Offline Local PHI Scrub Guard](docs/offline-privacy-guard.png) |
+
+---
+
 ## License
 
 Licensed under the **Apache License, Version 2.0**. See [LICENSE](LICENSE) for full terms.
