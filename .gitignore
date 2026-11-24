@@ -6,6 +6,9 @@ dist/
 dist-ssr/
 *.local
 
+# Vercel local state & build output
+.vercel/
+
 # Environment files & secrets (NEVER commit App Check debug tokens or keys)
 .env
 .env.*
