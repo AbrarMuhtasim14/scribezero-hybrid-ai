@@ -105,7 +105,7 @@ export default function SoapNoteViewer({
     : 'PII is redacted locally prior to Firebase AI Logic inference.'
 
   return (
-    <div className="bg-navy-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col h-full">
+    <div className="bg-navy-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800/80">
         <div className="flex items-center gap-2">

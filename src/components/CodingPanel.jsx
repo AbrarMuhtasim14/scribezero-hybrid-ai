@@ -84,7 +84,7 @@ export default function CodingPanel({
   const modelLabel = stats?.modelName || stats?.engine || 'Firebase AI Logic'
 
   return (
-    <div className="bg-navy-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col h-full space-y-4">
+    <div className="bg-navy-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
         <div className="flex items-center gap-2">
@@ -156,7 +156,7 @@ export default function CodingPanel({
             </span>
           </div>
 
-          <div className="space-y-2 flex-1 overflow-y-auto max-h-[220px] pr-1">
+          <div className="space-y-2 flex-1">
             {icd10_codes.length > 0 ? (
               icd10_codes.map((item, index) => (
                 <div key={index} className="p-2.5 rounded-lg bg-navy-900 border border-slate-800/90 flex items-start justify-between gap-2">
@@ -193,7 +193,7 @@ export default function CodingPanel({
             </span>
           </div>
 
-          <div className="space-y-2 flex-1 overflow-y-auto max-h-[220px] pr-1">
+          <div className="space-y-2 flex-1">
             {cpt_codes.length > 0 ? (
               cpt_codes.map((item, index) => (
                 <div key={index} className="p-2.5 rounded-lg bg-navy-900 border border-slate-800/90 flex items-start justify-between gap-2">
