@@ -1,0 +1,410 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: encounters
+// Document ID: auto-generated Firestore ID (1..128 chars)
+// Operations:
+//   - read (get/list): ordered by createdAt desc (no where/limit filter in client queries)
+//   - create: addDoc via firestoreService.js with serverTimestamp()
+//   - update: denied (immutable encounter records)
+//   - delete: deleteDoc via firestoreService.js
+// Fields (all 11 top-level fields set on saveEncounter):
+//   - icd10_codes: list (required, max 25 items)
+//       Each item map (required: code, description; optional: confidence):
+//       - code: string (1..20 chars)
+//       - description: string (1..500 chars)
+//       - confidence: number (optional, 0..100)
+//   - cpt_codes: list (required, max 15 items)
+//       Each item map (required: code, description; optional: level):
+//       - code: string (1..20 chars)
+//       - description: string (1..500 chars)
+//       - level: string (optional, 0..120 chars)
+//   - drug_interactions: list (required, max 25 items)
+//       Each item map (required: severity; optional: medications, warning, description):
+//       - severity: string (1..30 chars)
+//       - medications: list of strings (max 6 items, 1..120 chars each) or string (0..300 chars)
+//       - warning: string (optional, 0..1500 chars)
+//       - description: string (optional, 0..1500 chars)
+//   - clinical_summary: string (required, 0..5000 chars)
+//   - soapNote: string (required, 1..25000 chars) - De-identified SOAP clinical note
+//   - patient: map (required, de-identified metadata ONLY; NEVER dob, ssn, or name)
+//       Required keys: label, specialty, mrn, deIdentified
+//       Optional keys: ageGroup, gender
+//       - label: string (1..160 chars)
+//       - specialty: string (1..120 chars)
+//       - mrn: string (must equal "[REDACTED]")
+//       - deIdentified: bool (must equal true)
+//       - ageGroup: string (optional, 1..30 chars)
+//       - gender: string (optional, 1..30 chars)
+//   - inferenceStats: map (required, exact 7 keys)
+//       - soapEngine: string (1..120 chars)
+//       - soapSource: string (1..40 chars)
+//       - cloudEngine: string (1..120 chars)
+//       - cloudSource: string (1..40 chars)
+//       - mode: string (OFFLINE_QUEUED, HYBRID, PREFER_ON_DEVICE, PREFER_IN_CLOUD, ONLY_ON_DEVICE, ONLY_IN_CLOUD)
+//       - appCheckVerified: bool
+//       - preCloudScrubbed: bool (must equal true)
+//   - createdAt: timestamp (required, immutable, must equal request.time on create)
+//   - updatedAt: timestamp (required, must equal request.time on create)
+//   - syncedAt: string (required, ISO-8601 timestamp string, 19..40 chars)
+//   - syncedToCloud: bool (required)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user owns the resource (for user-owned documents)
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if user is owner based on document's uid field
+    function isDocOwner() {
+      return isAuthenticated() &&
+        ('uid' in resource.data) &&
+        request.auth.uid == resource.data.uid;
+    }
+
+    // Verify UID hasn't been tampered with on create
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        (isAuthenticated() && request.resource.data.uid == request.auth.uid);
+    }
+
+    // Ensure uid field is not modified on update
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    // Hackathon demo access fallback while Firebase Authentication is disabled
+    // on project `scribezero-hybrid-ai` (identitytoolkit 400 CONFIGURATION_NOT_FOUND).
+    // Note: Cloud Firestore Security Rules `request` does not expose `request.app`
+    // for App Check; App Check enforcement is configured in the Firebase Console.
+    // Before production launch, enable Firebase Auth and require `isAuthenticated()`
+    // (plus `isDocOwner()` on reads/deletes).
+    function isDemoAccessAllowed() {
+      return true;
+    }
+
+    // Validate required top-level fields exist
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate document contains only allowed top-level fields
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate immutable fields have not changed on update
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate a string value length
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    // Validate a required document field string length
+    function validStringLength(field, minLen, maxLen) {
+      return isValidString(request.resource.data[field], minLen, maxLen);
+    }
+
+    // Validate optional string field inside a map
+    function isValidOptionalStringInMap(mapData, field, minLen, maxLen) {
+      return !(field in mapData) || isValidString(mapData[field], minLen, maxLen);
+    }
+
+    // Validate ISO-8601 timestamp string format (e.g., 2026-11-24T17:58:44.123Z)
+    function isValidDateString(dateStr) {
+      return dateStr is string &&
+        dateStr.size() >= 19 &&
+        dateStr.size() <= 40 &&
+        dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|[+-]\\d{2}:\\d{2})?$");
+    }
+
+    // Validate list type and max size
+    function isValidList(listVal, maxSize) {
+      return listVal is list && listVal.size() <= maxSize;
+    }
+
+    // Validate map type and allowed keys
+    function isValidMap(mapData, allowedKeys) {
+      return mapData is map && mapData.keys().hasOnly(allowedKeys);
+    }
+
+    // Validate timestamp is recent (within last 5 minutes)
+    function isRecent(timeVal) {
+      return timeVal is timestamp &&
+        timeVal > request.time - duration.value(5, 'm') &&
+        timeVal <= request.time;
+    }
+
+    // ===============================================================
+    // Domain Validators (De-Identified Clinical Encounter Schema)
+    // ===============================================================
+
+    function isValidDeidentifiedPatient(patient) {
+      return isValidMap(patient, [
+          'label',
+          'specialty',
+          'mrn',
+          'deIdentified',
+          'ageGroup',
+          'gender'
+        ]) &&
+        patient.keys().hasAll(['label', 'specialty', 'mrn', 'deIdentified']) &&
+        !('dob' in patient) &&
+        !('ssn' in patient) &&
+        !('name' in patient) &&
+        isValidString(patient.label, 1, 160) &&
+        isValidString(patient.specialty, 1, 120) &&
+        patient.mrn == '[REDACTED]' &&
+        patient.deIdentified == true &&
+        isValidOptionalStringInMap(patient, 'ageGroup', 1, 30) &&
+        isValidOptionalStringInMap(patient, 'gender', 1, 30);
+    }
+
+    function isValidIcd10Item(item) {
+      return isValidMap(item, ['code', 'description', 'confidence']) &&
+        item.keys().hasAll(['code', 'description']) &&
+        item.code is string && item.code.size() >= 1 && item.code.size() <= 20 &&
+        item.description is string && item.description.size() >= 1 && item.description.size() <= 500 &&
+        (!('confidence' in item) || (item.confidence is number && item.confidence >= 0 && item.confidence <= 100));
+    }
+
+    function isValidIcd10List(codes) {
+      return isValidList(codes, 25) &&
+        (codes.size() <= 0 || isValidIcd10Item(codes[0])) &&
+        (codes.size() <= 1 || isValidIcd10Item(codes[1])) &&
+        (codes.size() <= 2 || isValidIcd10Item(codes[2])) &&
+        (codes.size() <= 3 || isValidIcd10Item(codes[3])) &&
+        (codes.size() <= 4 || isValidIcd10Item(codes[4])) &&
+        (codes.size() <= 5 || isValidIcd10Item(codes[5])) &&
+        (codes.size() <= 6 || isValidIcd10Item(codes[6])) &&
+        (codes.size() <= 7 || isValidIcd10Item(codes[7])) &&
+        (codes.size() <= 8 || isValidIcd10Item(codes[8])) &&
+        (codes.size() <= 9 || isValidIcd10Item(codes[9])) &&
+        (codes.size() <= 10 || isValidIcd10Item(codes[10])) &&
+        (codes.size() <= 11 || isValidIcd10Item(codes[11])) &&
+        (codes.size() <= 12 || isValidIcd10Item(codes[12])) &&
+        (codes.size() <= 13 || isValidIcd10Item(codes[13])) &&
+        (codes.size() <= 14 || isValidIcd10Item(codes[14])) &&
+        (codes.size() <= 15 || isValidIcd10Item(codes[15])) &&
+        (codes.size() <= 16 || isValidIcd10Item(codes[16])) &&
+        (codes.size() <= 17 || isValidIcd10Item(codes[17])) &&
+        (codes.size() <= 18 || isValidIcd10Item(codes[18])) &&
+        (codes.size() <= 19 || isValidIcd10Item(codes[19])) &&
+        (codes.size() <= 20 || isValidIcd10Item(codes[20])) &&
+        (codes.size() <= 21 || isValidIcd10Item(codes[21])) &&
+        (codes.size() <= 22 || isValidIcd10Item(codes[22])) &&
+        (codes.size() <= 23 || isValidIcd10Item(codes[23])) &&
+        (codes.size() <= 24 || isValidIcd10Item(codes[24]));
+    }
+
+    function isValidCptItem(item) {
+      return isValidMap(item, ['code', 'description', 'level']) &&
+        item.keys().hasAll(['code', 'description']) &&
+        item.code is string && item.code.size() >= 1 && item.code.size() <= 20 &&
+        item.description is string && item.description.size() >= 1 && item.description.size() <= 500 &&
+        (!('level' in item) || (item.level is string && item.level.size() <= 120));
+    }
+
+    function isValidCptList(codes) {
+      return isValidList(codes, 15) &&
+        (codes.size() <= 0 || isValidCptItem(codes[0])) &&
+        (codes.size() <= 1 || isValidCptItem(codes[1])) &&
+        (codes.size() <= 2 || isValidCptItem(codes[2])) &&
+        (codes.size() <= 3 || isValidCptItem(codes[3])) &&
+        (codes.size() <= 4 || isValidCptItem(codes[4])) &&
+        (codes.size() <= 5 || isValidCptItem(codes[5])) &&
+        (codes.size() <= 6 || isValidCptItem(codes[6])) &&
+        (codes.size() <= 7 || isValidCptItem(codes[7])) &&
+        (codes.size() <= 8 || isValidCptItem(codes[8])) &&
+        (codes.size() <= 9 || isValidCptItem(codes[9])) &&
+        (codes.size() <= 10 || isValidCptItem(codes[10])) &&
+        (codes.size() <= 11 || isValidCptItem(codes[11])) &&
+        (codes.size() <= 12 || isValidCptItem(codes[12])) &&
+        (codes.size() <= 13 || isValidCptItem(codes[13])) &&
+        (codes.size() <= 14 || isValidCptItem(codes[14]));
+    }
+
+    function isValidMedicationsList(meds) {
+      return meds is list && meds.size() <= 6 &&
+        (meds.size() <= 0 || (meds[0] is string && meds[0].size() <= 120)) &&
+        (meds.size() <= 1 || (meds[1] is string && meds[1].size() <= 120)) &&
+        (meds.size() <= 2 || (meds[2] is string && meds[2].size() <= 120)) &&
+        (meds.size() <= 3 || (meds[3] is string && meds[3].size() <= 120)) &&
+        (meds.size() <= 4 || (meds[4] is string && meds[4].size() <= 120)) &&
+        (meds.size() <= 5 || (meds[5] is string && meds[5].size() <= 120));
+    }
+
+    function isValidDrugInteractionItem(item) {
+      return isValidMap(item, ['severity', 'medications', 'warning', 'description']) &&
+        item.keys().hasAll(['severity']) &&
+        item.severity is string && item.severity.size() >= 1 && item.severity.size() <= 30 &&
+        (!('medications' in item) || (item.medications is string && item.medications.size() <= 300) || isValidMedicationsList(item.medications)) &&
+        (!('warning' in item) || (item.warning is string && item.warning.size() <= 1500)) &&
+        (!('description' in item) || (item.description is string && item.description.size() <= 1500));
+    }
+
+    function isValidDrugInteractionsList(items) {
+      return isValidList(items, 25) &&
+        (items.size() <= 0 || isValidDrugInteractionItem(items[0])) &&
+        (items.size() <= 1 || isValidDrugInteractionItem(items[1])) &&
+        (items.size() <= 2 || isValidDrugInteractionItem(items[2])) &&
+        (items.size() <= 3 || isValidDrugInteractionItem(items[3])) &&
+        (items.size() <= 4 || isValidDrugInteractionItem(items[4])) &&
+        (items.size() <= 5 || isValidDrugInteractionItem(items[5])) &&
+        (items.size() <= 6 || isValidDrugInteractionItem(items[6])) &&
+        (items.size() <= 7 || isValidDrugInteractionItem(items[7])) &&
+        (items.size() <= 8 || isValidDrugInteractionItem(items[8])) &&
+        (items.size() <= 9 || isValidDrugInteractionItem(items[9])) &&
+        (items.size() <= 10 || isValidDrugInteractionItem(items[10])) &&
+        (items.size() <= 11 || isValidDrugInteractionItem(items[11])) &&
+        (items.size() <= 12 || isValidDrugInteractionItem(items[12])) &&
+        (items.size() <= 13 || isValidDrugInteractionItem(items[13])) &&
+        (items.size() <= 14 || isValidDrugInteractionItem(items[14])) &&
+        (items.size() <= 15 || isValidDrugInteractionItem(items[15])) &&
+        (items.size() <= 16 || isValidDrugInteractionItem(items[16])) &&
+        (items.size() <= 17 || isValidDrugInteractionItem(items[17])) &&
+        (items.size() <= 18 || isValidDrugInteractionItem(items[18])) &&
+        (items.size() <= 19 || isValidDrugInteractionItem(items[19])) &&
+        (items.size() <= 20 || isValidDrugInteractionItem(items[20])) &&
+        (items.size() <= 21 || isValidDrugInteractionItem(items[21])) &&
+        (items.size() <= 22 || isValidDrugInteractionItem(items[22])) &&
+        (items.size() <= 23 || isValidDrugInteractionItem(items[23])) &&
+        (items.size() <= 24 || isValidDrugInteractionItem(items[24]));
+    }
+
+    function isValidInferenceStats(statsMap) {
+      return isValidMap(statsMap, [
+          'soapEngine',
+          'soapSource',
+          'cloudEngine',
+          'cloudSource',
+          'mode',
+          'appCheckVerified',
+          'preCloudScrubbed'
+        ]) &&
+        statsMap.keys().hasAll([
+          'soapEngine',
+          'soapSource',
+          'cloudEngine',
+          'cloudSource',
+          'mode',
+          'appCheckVerified',
+          'preCloudScrubbed'
+        ]) &&
+        isValidString(statsMap.soapEngine, 1, 120) &&
+        isValidString(statsMap.soapSource, 1, 40) &&
+        isValidString(statsMap.cloudEngine, 1, 120) &&
+        isValidString(statsMap.cloudSource, 1, 40) &&
+        statsMap.mode is string &&
+        statsMap.mode in [
+          'OFFLINE_QUEUED',
+          'HYBRID',
+          'PREFER_ON_DEVICE',
+          'PREFER_IN_CLOUD',
+          'ONLY_ON_DEVICE',
+          'ONLY_IN_CLOUD'
+        ] &&
+        statsMap.appCheckVerified is bool &&
+        statsMap.preCloudScrubbed == true;
+    }
+
+    function isValidEncounter(data) {
+      return hasRequiredFields([
+          'icd10_codes',
+          'cpt_codes',
+          'drug_interactions',
+          'clinical_summary',
+          'soapNote',
+          'patient',
+          'inferenceStats',
+          'createdAt',
+          'updatedAt',
+          'syncedAt',
+          'syncedToCloud'
+        ]) &&
+        hasOnlyAllowedFields([
+          'icd10_codes',
+          'cpt_codes',
+          'drug_interactions',
+          'clinical_summary',
+          'soapNote',
+          'patient',
+          'inferenceStats',
+          'createdAt',
+          'updatedAt',
+          'syncedAt',
+          'syncedToCloud'
+        ]) &&
+        isValidIcd10List(data.icd10_codes) &&
+        isValidCptList(data.cpt_codes) &&
+        isValidDrugInteractionsList(data.drug_interactions) &&
+        validStringLength('clinical_summary', 0, 5000) &&
+        validStringLength('soapNote', 1, 25000) &&
+        isValidDeidentifiedPatient(data.patient) &&
+        isValidInferenceStats(data.inferenceStats) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        isValidDateString(data.syncedAt) &&
+        data.syncedToCloud is bool;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /encounters/{encounterId} {
+      // Allows get & list (ordered by createdAt desc) for strictly de-identified demo encounters.
+      // Tighten to `if isAuthenticated();` once Firebase Auth is enabled.
+      allow read: if isAuthenticated() || isDemoAccessAllowed();
+
+      // Strictly validates de-identified schema, field types, size bounds,
+      // and server-assigned timestamps (`request.time`) on creation.
+      allow create: if (isAuthenticated() || isDemoAccessAllowed()) &&
+        encounterId is string &&
+        encounterId.size() > 0 &&
+        encounterId.size() <= 128 &&
+        isValidEncounter(request.resource.data) &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time;
+
+      // Encounters are immutable once persisted (firestoreService.js only uses create/read/delete).
+      // If updates are added later, require `isDocOwner() && isValidEncounter(request.resource.data)
+      // && areImmutableFieldsUnchanged(['createdAt']) && request.resource.data.updatedAt == request.time`.
+      allow update: if false;
+
+      // Allows deleting an encounter record from EncounterHistory.
+      // Tighten to `if isDocOwner();` once Firebase Auth + owner uid are enabled.
+      allow delete: if (isAuthenticated() || isDemoAccessAllowed()) &&
+        encounterId is string &&
+        encounterId.size() > 0 &&
+        encounterId.size() <= 128;
+    }
+
+    // Default deny for all other collections and subcollections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+*.local
+
+# Environment files & secrets (NEVER commit App Check debug tokens or keys)
+.env
+.env.*
+!.env.example
+
+# Firebase CLI / Emulator logs & cache
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+*-debug.log
+
+# IDE / OS / Scratch artifacts
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.playwright-mcp/
+*.log
