@@ -38,13 +38,21 @@ export default function SoapNoteViewer({
     setTimeout(() => setCopied(false), 2000)
   }
 
-  // Parse SOAP sections if structured
+  // Parse SOAP sections cleanly whether formatted as "# SUBJECTIVE" or "SUBJECTIVE:"
   const parseSections = (text) => {
     if (!text) return null
-    const subjective = text.match(/SUBJECTIVE:?([\s\S]*?)(?=OBJECTIVE:|$)/i)?.[1]?.trim() || ''
-    const objective = text.match(/OBJECTIVE:?([\s\S]*?)(?=ASSESSMENT:|$)/i)?.[1]?.trim() || ''
-    const assessment = text.match(/ASSESSMENT:?([\s\S]*?)(?=PLAN:|$)/i)?.[1]?.trim() || ''
-    const plan = text.match(/PLAN:?([\s\S]*?)$/i)?.[1]?.trim() || ''
+    const subjective = text
+      .match(/(?:^|\n)\s*#*\s*\*{0,2}SUBJECTIVE\*{0,2}:?\s*(?:\n|$)([\s\S]*?)(?=(?:^|\n)\s*#*\s*\*{0,2}OBJECTIVE\*{0,2}:?\s*(?:\n|$)|$)/i)?.[1]
+      ?.trim() || ''
+    const objective = text
+      .match(/(?:^|\n)\s*#*\s*\*{0,2}OBJECTIVE\*{0,2}:?\s*(?:\n|$)([\s\S]*?)(?=(?:^|\n)\s*#*\s*\*{0,2}ASSESSMENT\*{0,2}:?\s*(?:\n|$)|$)/i)?.[1]
+      ?.trim() || ''
+    const assessment = text
+      .match(/(?:^|\n)\s*#*\s*\*{0,2}ASSESSMENT\*{0,2}:?\s*(?:\n|$)([\s\S]*?)(?=(?:^|\n)\s*#*\s*\*{0,2}PLAN\*{0,2}:?\s*(?:\n|$)|$)/i)?.[1]
+      ?.trim() || ''
+    const plan = text
+      .match(/(?:^|\n)\s*#*\s*\*{0,2}PLAN\*{0,2}:?\s*(?:\n|$)([\s\S]*?)$/i)?.[1]
+      ?.trim() || ''
 
     if (subjective || objective || assessment || plan) {
       return { subjective, objective, assessment, plan }
