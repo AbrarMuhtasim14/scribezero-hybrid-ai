@@ -12,8 +12,8 @@
 
 ## Live Links & Submission Assets
 
+- **Live Web App (Firebase Hosting):** `https://scribezero-hybrid-ai.web.app` *(deployed alongside hardened `firestore.rules`; requires `VITE_RECAPTCHA_SITE_KEY` set during build for production Firebase App Check attestation)*
 - **Live Web App (Vercel Production):** `https://scribezero-hybrid-ai.vercel.app` *(requires `VITE_RECAPTCHA_SITE_KEY` set in Vercel env vars for Firebase App Check attestation)*
-- **Firebase Hosting Target:** `https://scribezero-hybrid-ai.web.app` *(configured in `firebase.json`; deploy via `npx -y firebase-tools@latest deploy --only hosting,firestore:rules`)*
 - **Source Repository:** `https://github.com/AbrarMuhtasim14/scribezero-hybrid-ai`
 - **Demo Video (<= 3 min, YouTube):** *(Add public YouTube URL before locking Devpost submission on Nov 30, 2026 @ 2:00 PM PT)*
 
